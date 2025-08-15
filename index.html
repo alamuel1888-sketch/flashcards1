@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flashcards – 100% Free, Offline</title>
+  <meta name="theme-color" content="#0f172a" />
+  <link rel="manifest" href="data:application/manifest+json,{\n  \"name\": \"Flashcards\",\n  \"short_name\": \"Cards\",\n  \"start_url\": \"./\",\n  \"display\": \"standalone\",\n  \"background_color\": \"#0f172a\",\n  \"theme_color\": \"#0f172a\",\n  \"icons\": []\n}" />
+  <style>
+    :root { --bg:#0b1220; --panel:#0f172a; --muted:#94a3b8; --text:#e2e8f0; --brand:#22d3ee; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --ring:#334155; }
+    *{box-sizing:border-box} html,body{height:100%}
+    body {margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial; background:linear-gradient(180deg,#0b1220,#0a0f1a); color:var(--text)}
+    .app{display:grid; grid-template-columns:280px 1fr; height:100%}
+    .sidebar{background:var(--panel); border-right:1px solid var(--ring); padding:16px; overflow:auto}
+    h1{margin:0 0 8px; font-size:18px; letter-spacing:.3px}
+    .brand{display:flex; gap:8px; align-items:center}
+    .brand .dot{width:10px; height:10px; border-radius:50%; background:var(--brand); box-shadow:0 0 12px var(--brand)}
+    .muted{color:var(--muted)}
+    .row{display:flex; gap:8px; align-items:center}
+    .col{display:flex; flex-direction:column; gap:8px}
+    .btn{background:#111827; color:var(--text); border:1px solid var(--ring); padding:8px 10px; border-radius:10px; cursor:pointer}
+    .btn:hover{border-color:#475569}
+    .btn.primary{background:linear-gradient(180deg,#0ea5e9,#06b6d4); border:none; color:#001018; font-weight:700}
+    .btn.bad{background:#1b0f12; color:#fecaca; border:1px solid #7f1d1d}
+    .btn.ok{background:#0f1b12; color:#dcfce7; border:1px solid #14532d}
+    .btn.warn{background:#1b160f; color:#fff7ed; border:1px solid #7c2d12}
+    .input, textarea, select{width:100%; background:#0b1020; color:var(--text); border:1px solid var(--ring); padding:10px 12px; border-radius:10px}
+    .deck{display:flex; justify-content:space-between; align-items:center; padding:10px; border:1px solid var(--ring); border-radius:12px; background:#0b1020; cursor:pointer}
+    .deck:hover{border-color:#475569}
+    .content{padding:16px; overflow:auto}
+    .tabs{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}
+    .tab{padding:8px 12px; border:1px solid var(--ring); border-radius:999px; cursor:pointer; background:#0b1020}
+    .tab.active{border-color:var(--brand); box-shadow:0 0 0 2px rgba(34,211,238,.15)}
+    table{width:100%; border-collapse:collapse; overflow:hidden; border-radius:12px}
+    th,td{border-bottom:1px solid var(--ring); padding:10px; text-align:left}
+    tr:hover td{background:#0a1327}
+    .card{border:1px solid var(--ring); border-radius:14px; background:#0b1020}
+    .card > .hd{padding:12px 14px; border-bottom:1px solid var(--ring); font-weight:700}
+    .card > .bd{padding:12px 14px}
+    .pill{padding:2px 8px; border:1px solid var(--ring); border-radius:999px; font-size:12px}
+    .grid{display:grid; gap:12px}
+    @media (min-width: 1000px){ .grid.two{grid-template-columns: 1fr 1fr} }
+    .flip{perspective:1200px}
+    .flip .face{transform-style:preserve-3d; transition: transform .5s ease;}
+    .flip.show .face{transform:rotateY(180deg)}
+    .face>div{backface-visibility:hidden}
+    .back{transform:rotateY(180deg)}
+    .footer{margin-top:12px; font-size:12px}
+  </style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar col">
+    <div class="brand"><div class="dot"></div><h1>Flashcards</h1></div>
+    <div class="muted">No subscriptions. Your data stays on this device.</div>
+    <div class="row" style="margin-top:10px; gap:6px">
+      <input id="newDeckName" class="input" placeholder="New deck name"/>
+      <button class="btn primary" id="addDeckBtn">Add</button>
+    </div>
+    <div id="deckList" class="col" style="margin-top:10px"></div>
+    <div style="margin-top:16px" class="row" >
+      <button id="exportBtn" class="btn">Export JSON</button>
+      <label class="btn" for="importFile">Import</label>
+      <input id="importFile" type="file" accept="application/json" style="display:none" />
+    </div>
+    <div class="footer muted">
+      <div>Installable: use browser “Add to Home Screen”.</div>
+      <div>Offline-ready PWA.</div>
+    </div>
+  </aside>
+  <main class="content">
+    <div class="tabs" id="tabs"></div>
+    <section id="view"></section>
+  </main>
+</div>
+<script>
+// ---------- Storage & State ----------
+const KEY = 'flashcards_v1';
+const now = () => new Date().toISOString();
+const todayDateOnly = () => new Date().toISOString().slice(0,10);
+let state = load();
+let currentDeck = state.decks[0]?.id || null;
+let currentTab = 'Study';
+
+function load(){
+  const s = localStorage.getItem(KEY);
+  if(s){ try { return JSON.parse(s); } catch{ /* fallthrough */ } }
+  return { decks: [], cards: [], settings: { theme:'dark' } };
+}
+function save(){ localStorage.setItem(KEY, JSON.stringify(state)); render(); }
+function uid(){ return Math.random().toString(36).slice(2)+Date.now().toString(36) }
+
+// ---------- Models ----------
+function addDeck(name){ if(!name.trim()) return; state.decks.push({ id:uid(), name:name.trim(), createdAt: now() }); save(); }
+function deckById(id){ return state.decks.find(d=>d.id===id); }
+function cardsInDeck(id){ return state.cards.filter(c=>c.deckId===id); }
+function addCard(deckId, front, back){ if(!front.trim()||!back.trim()) return; state.cards.push({ id:uid(), deckId, front:front.trim(), back:back.trim(), createdAt:now(), stats:{ EF:2.5, reps:0, interval:0, due: todayDateOnly(), lastGrade:null } }); save(); }
+function deleteCard(id){ state.cards = state.cards.filter(c=>c.id!==id); save(); }
+function deleteDeck(id){ state.cards = state.cards.filter(c=>c.deckId!==id); state.decks = state.decks.filter(d=>d.id!==id); if(currentDeck===id) currentDeck = state.decks[0]?.id || null; save(); }
+
+// ---------- SM-2 Lite ----------
+function review(card, grade){
+  // grade: 0-again, 3-hard, 4-good, 5-easy
+  const s = card.stats;
+  if(grade < 3){
+    s.reps = 0; s.interval = 1; s.EF = Math.max(1.3, s.EF - 0.2); // small penalty
+  } else {
+    s.reps += 1;
+    if(s.reps === 1){ s.interval = 1; }
+    else if(s.reps === 2){ s.interval = 6; }
+    else { s.interval = Math.round(s.interval * s.EF); }
+    const EFnew = s.EF + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02));
+    s.EF = Math.max(1.3, EFnew);
+  }
+  s.lastGrade = grade;
+  const due = new Date();
+  due.setDate(due.getDate() + Math.max(1, s.interval));
+  s.due = due.toISOString().slice(0,10);
+  save();
+}
+
+// ---------- UI: Tabs ----------
+const TABS = ['Study','Add','Browse','Stats','Settings'];
+function renderTabs(){
+  const el = document.getElementById('tabs');
+  el.innerHTML = '';
+  TABS.forEach(tab=>{
+    const b = document.createElement('button');
+    b.className = 'tab' + (currentTab===tab?' active':'');
+    b.textContent = tab;
+    b.onclick = ()=>{ currentTab = tab; renderView(); };
+    el.appendChild(b);
+  });
+}
+
+// ---------- UI: Sidebar decks ----------
+function dueCount(deckId){
+  const d = todayDateOnly();
+  return cardsInDeck(deckId).filter(c=> (c.stats?.due||d) <= d).length;
+}
+function renderDecks(){
+  const list = document.getElementById('deckList');
+  list.innerHTML = '';
+  state.decks.forEach(d=>{
+    const row = document.createElement('div');
+    row.className = 'deck';
+    row.innerHTML = `<div><strong>${d.name}</strong><div class="muted">${cardsInDeck(d.id).length} cards</div></div>
+                     <div class="pill">${dueCount(d.id)} due</div>`;
+    row.onclick = ()=>{ currentDeck = d.id; render(); };
+    list.appendChild(row);
+  });
+}
+
+// ---------- Views ----------
+function renderView(){
+  const v = document.getElementById('view');
+  v.innerHTML = '';
+  if(!currentDeck){ v.innerHTML = '<div class="muted">Create a deck to get started.</div>'; return; }
+  if(currentTab==='Add') return viewAdd(v);
+  if(currentTab==='Browse') return viewBrowse(v);
+  if(currentTab==='Study') return viewStudy(v);
+  if(currentTab==='Stats') return viewStats(v);
+  if(currentTab==='Settings') return viewSettings(v);
+}
+
+function viewAdd(v){
+  const wrap = document.createElement('div');
+  wrap.className = 'grid two';
+  wrap.innerHTML = `
+    <div class="card">
+      <div class="hd">Add Card to <span class="pill">${deckById(currentDeck)?.name}</span></div>
+      <div class="bd col">
+        <textarea id="front" rows="4" placeholder="Front (Question / Term)"></textarea>
+        <textarea id="back" rows="4" placeholder="Back (Answer / Definition)"></textarea>
+        <div class="row" style="gap:6px">
+          <button class="btn primary" id="saveCard">Save</button>
+          <button class="btn" id="saveAndAdd">Save + New</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="hd">Quick Tips</div>
+      <div class="bd">
+        <ul>
+          <li>Keep cards short: one fact per card.</li>
+          <li>Use images by pasting Markdown links on the back: <code>![alt](https://...)</code> (will render inline).</li>
+          <li>Use tags with <code>#likeThis</code> to group topics (searchable).</li>
+        </ul>
+      </div>
+    </div>`;
+  v.appendChild(wrap);
+  document.getElementById('saveCard').onclick = ()=>{ saveCard(false) };
+  document.getElementById('saveAndAdd').onclick = ()=>{ saveCard(true) };
+  function saveCard(keepOpen){
+    const f = document.getElementById('front');
+    const b = document.getElementById('back');
+    addCard(currentDeck, f.value, b.value);
+    if(keepOpen){ f.value=''; b.value=''; f.focus(); } else { currentTab='Browse'; render(); }
+  }
+}
+
+function renderMarkdown(md){
+  // Super tiny MD renderer for images + line breaks
+  const img = md.replace(/!\[(.*?)\]\((.*?)\)/g, '<img alt="$1" src="$2" style="max-width:100%; border-radius:10px; border:1px solid var(--ring);" />');
+  return img.replace(/\n/g,'<br/>');
+}
+
+function viewBrowse(v){
+  const wrap = document.createElement('div');
+  const cards = cardsInDeck(currentDeck);
+  wrap.innerHTML = `
+    <div class="row" style="gap:8px; margin-bottom:8px">
+      <input id="q" class="input" placeholder="Search text or #tags" />
+      <button class="btn" id="shuffle">Shuffle</button>
+      <button class="btn warn" id="wipeDeck">Delete Deck</button>
+    </div>
+  `;
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  thead.innerHTML = '<tr><th>Front</th><th>Back</th><th>Due</th><th></th></tr>';
+  table.appendChild(thead);
+  const tbody = document.createElement('tbody');
+  function fill(list){
+    tbody.innerHTML = '';
+    list.forEach(c=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${c.front.replaceAll('<','&lt;')}</td>
+                      <td>${renderMarkdown(c.back)}</td>
+                      <td><span class="pill">${c.stats?.due||'-'}</span></td>
+                      <td><button class="btn bad" data-id="${c.id}">Delete</button></td>`;
+      tbody.appendChild(tr);
+    });
+  }
+  fill(cards);
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  v.appendChild(wrap);
+
+  document.getElementById('q').oninput = (e)=>{
+    const t = e.target.value.trim().toLowerCase();
+    const filtered = cards.filter(c=> (c.front+' '+c.back).toLowerCase().includes(t));
+    fill(filtered);
+  };
+  document.getElementById('shuffle').onclick = ()=>{ fill([...cards].sort(()=>Math.random()-0.5)); };
+  document.getElementById('wipeDeck').onclick = ()=>{
+    if(confirm('Delete this deck and all its cards?')) deleteDeck(currentDeck);
+  };
+  table.addEventListener('click', (e)=>{
+    const id = e.target?.dataset?.id; if(id){ if(confirm('Delete this card?')) deleteCard(id); }
+  });
+}
+
+function viewStudy(v){
+  const d = todayDateOnly();
+  const due = cardsInDeck(currentDeck).filter(c=> (c.stats?.due||d) <= d);
+  const remaining = due.length;
+  const card = due[0];
+  const deckName = deckById(currentDeck)?.name || '';
+  if(!card){ v.innerHTML = `<div class="card"><div class="hd">Study – ${deckName}</div><div class="bd">All caught up for today 🎉</div></div>`; return; }
+
+  const box = document.createElement('div');
+  box.className = 'card';
+  box.innerHTML = `<div class="hd">Study – ${deckName} <span class="pill" style="margin-left:8px">${remaining} due</span></div>
+  <div class="bd col">
+    <div class="flip" id="flip">
+      <div class="face">
+        <div class="front">${renderMarkdown(card.front)}</div>
+        <div class="back">${renderMarkdown(card.back)}</div>
+      </div>
+    </div>
+    <div class="row" style="gap:8px">
+      <button class="btn" id="show">Show Answer</button>
+      <div class="row" id="grades" style="display:none; gap:6px">
+        <button class="btn bad" data-g="0">Again</button>
+        <button class="btn warn" data-g="3">Hard</button>
+        <button class="btn ok" data-g="4">Good</button>
+        <button class="btn primary" data-g="5">Easy</button>
+      </div>
+    </div>
+  </div>`;
+  v.appendChild(box);
+
+  const flip = document.getElementById('flip');
+  document.getElementById('show').onclick = ()=>{ flip.classList.add('show'); document.getElementById('grades').style.display='flex'; };
+  document.getElementById('grades').onclick = (e)=>{
+    const g = e.target?.dataset?.g; if(!g) return;
+    review(card, Number(g));
+  };
+}
+
+function viewStats(v){
+  const cards = cardsInDeck(currentDeck);
+  const total = cards.length;
+  const today = todayDateOnly();
+  const dueToday = cards.filter(c=> (c.stats?.due||today) <= today).length;
+  const learned = cards.filter(c=> (c.stats?.reps||0) >= 3).length;
+  v.innerHTML = `
+    <div class="grid two">
+      <div class="card"><div class="hd">Overview</div><div class="bd">
+        <div class="row" style="gap:8px; flex-wrap:wrap">
+          <div class="pill">Total: ${total}</div>
+          <div class="pill">Due Today: ${dueToday}</div>
+          <div class="pill">Mature (≥3 reps): ${learned}</div>
+        </div>
+      </div></div>
+      <div class="card"><div class="hd">Next 7 Days</div><div class="bd" id="forecast"></div></div>
+    </div>`;
+  // Forecast counts by day
+  const map = new Map();
+  for(let i=0;i<7;i++){
+    const d = new Date(); d.setDate(d.getDate()+i); const key=d.toISOString().slice(0,10);
+    map.set(key,0);
+  }
+  cards.forEach(c=>{ const due = c.stats?.due; if(map.has(due)) map.set(due, map.get(due)+1); });
+  const fc = document.getElementById('forecast');
+  const ul = document.createElement('ul');
+  ul.style.listStyle='none'; ul.style.padding=0; ul.style.margin=0;
+  map.forEach((v,k)=>{ const li=document.createElement('li'); li.className='row'; li.style.justifyContent='space-between'; li.style.padding='6px 0'; li.innerHTML = `<span class="muted">${k}</span><span class="pill">${v} due</span>`; ul.appendChild(li); });
+  fc.appendChild(ul);
+}
+
+function viewSettings(v){
+  v.innerHTML = `
+  <div class="grid two">
+    <div class="card"><div class="hd">Deck Settings</div><div class="bd col">
+      <div class="row" style="gap:8px">
+        <input id="renameDeckInput" class="input" placeholder="Rename deck" value="${deckById(currentDeck)?.name||''}"/>
+        <button id="renameDeckBtn" class="btn">Rename</button>
+      </div>
+      <div class="muted">Danger zone</div>
+      <button id="deleteDeckBtn" class="btn bad">Delete this deck</button>
+    </div></div>
+    <div class="card"><div class="hd">Backup</div><div class="bd col">
+      <button class="btn" id="exportBtn2">Export JSON</button>
+      <label class="btn" for="importFile2">Import JSON</label>
+      <input id="importFile2" type="file" accept="application/json" style="display:none" />
+      <div class="muted">Tip: back up regularly to keep your data safe.</div>
+    </div></div>
+  </div>`;
+  document.getElementById('renameDeckBtn').onclick = ()=>{
+    const v = document.getElementById('renameDeckInput').value.trim();
+    if(v){ deckById(currentDeck).name = v; save(); }
+  };
+  document.getElementById('deleteDeckBtn').onclick = ()=>{ if(confirm('Delete this deck and all its cards?')) deleteDeck(currentDeck); };
+  // Bind backup controls here too
+  document.getElementById('exportBtn2').onclick = exportJSON;
+  document.getElementById('importFile2').onchange = importJSON;
+}
+
+// ---------- Export / Import ----------
+function exportJSON(){
+  const blob = new Blob([JSON.stringify(state,null,2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'flashcards_backup_'+Date.now()+'.json'; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function importJSON(e){
+  const file = e.target.files[0]; if(!file) return;
+  const fr = new FileReader();
+  fr.onload = () => { try { const obj = JSON.parse(fr.result); if(obj.decks && obj.cards){ state = obj; currentDeck = state.decks[0]?.id||null; save(); } else alert('Invalid file.'); } catch{ alert('Invalid JSON.'); } };
+  fr.readAsText(file);
+}
+
+// ---------- Global event wiring ----------
+function render(){
+  renderTabs();
+  renderDecks();
+  renderView();
+}
+
+document.getElementById('addDeckBtn').onclick = ()=>{ addDeck(document.getElementById('newDeckName').value); document.getElementById('newDeckName').value=''; };
+document.getElementById('exportBtn').onclick = exportJSON;
+document.getElementById('importFile').onchange = importJSON;
+
+// ---------- PWA: Inline Service Worker ----------
+if('serviceWorker' in navigator){
+  const swCode = `self.addEventListener('install', e=>{ self.skipWaiting(); e.waitUntil(caches.open('fcache-v1').then(c=>c.addAll(['./']))); });
+self.addEventListener('activate', e=> self.clients.claim());
+self.addEventListener('fetch', e=>{ e.respondWith(caches.match(e.request).then(r=> r || fetch(e.request))); });`;
+  const blob = new Blob([swCode], {type:'text/javascript'});
+  const url = URL.createObjectURL(blob);
+  navigator.serviceWorker.register(url).catch(()=>{});
+}
+
+// ---------- Kickoff ----------
+render();
+// Seed a starter deck on first run
+if(state.decks.length===0){ addDeck('My First Deck'); addCard(state.decks[0].id, 'What is spaced repetition?', 'A study technique that schedules reviews over increasing intervals to boost long-term memory.'); }
+</script>
+</body>
+</html>
